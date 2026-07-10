@@ -1,0 +1,403 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CentreStatus {
+  ACTIVE
+  PENDING_REVIEW
+  ARCHIVED
+}
+
+enum RequestType {
+  NORMAL
+  SPECIAL
+}
+
+enum RequestStatus {
+  RECEIVED
+  FORWARDED_TO_MANAGER
+  MANAGER_APPROVED
+  WAITING_MARKETING_APPROVAL
+  MARKETING_RECOMMENDED
+  FINAL_APPROVED
+  SENT_TO_CENTRE
+  SENT_TO_FINANCE
+  PAID
+}
+
+enum ReviewStatus {
+  NOT_REQUIRED
+  REQUIRED
+  IN_REVIEW
+  RESOLVED
+}
+
+enum BeneficiaryType {
+  DOCTOR
+  AMBULANCE_DRIVER
+  KOL
+  HOSPITAL_STAFF
+  OTHER
+}
+
+enum AttachmentType {
+  REFERRAL_NOTE
+  CATHLAB_NOTE
+  PRESCRIPTION
+  PTCA_NOTE
+  OTHER
+}
+
+enum AttachmentStorageStatus {
+  PENDING
+  ARCHIVED
+  FAILED
+}
+
+enum AttachmentExtractionStatus {
+  PENDING
+  EXTRACTED
+  SKIPPED
+  FAILED
+}
+
+enum DetectionMethod {
+  RULES
+  AI
+  MANUAL
+  SYSTEM
+}
+
+enum SyncTrigger {
+  CRON
+  MANUAL
+  RECOVERY
+}
+
+enum SyncRunStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+enum ExtractionOperation {
+  CANDIDATE_CLASSIFICATION
+  REQUEST_EXTRACTION
+  APPROVAL_DETECTION
+}
+
+enum ExtractionRunStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum ExportJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Centre {
+  id             String       @id @default(uuid()) @db.Uuid
+  name           String       @db.VarChar(160)
+  normalizedName String       @unique @map("normalized_name") @db.VarChar(160)
+  status         CentreStatus @default(PENDING_REVIEW)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  aliases  CentreAlias[]
+  requests ReferralRequest[]
+
+  @@index([status])
+  @@map("centres")
+}
+
+model CentreAlias {
+  id              String   @id @default(uuid()) @db.Uuid
+  centreId        String   @map("centre_id") @db.Uuid
+  alias           String   @db.VarChar(160)
+  normalizedAlias String   @unique @map("normalized_alias") @db.VarChar(160)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  centre Centre @relation(fields: [centreId], references: [id], onDelete: Restrict)
+
+  @@index([centreId])
+  @@map("centre_aliases")
+}
+
+model GmailThread {
+  id                   String    @id @default(uuid()) @db.Uuid
+  gmailThreadId        String    @unique @map("gmail_thread_id") @db.VarChar(128)
+  subject              String?   @db.Text
+  latestGmailMessageId String?   @map("latest_gmail_message_id") @db.VarChar(128)
+  latestHistoryId      String?   @map("latest_history_id") @db.VarChar(128)
+  lastSyncedAt         DateTime? @map("last_synced_at") @db.Timestamptz(6)
+  rawMetadata          Json?     @map("raw_metadata")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  messages GmailMessage[]
+  request  ReferralRequest?
+
+  @@index([lastSyncedAt])
+  @@map("gmail_threads")
+}
+
+model GmailMessage {
+  id                  String   @id @default(uuid()) @db.Uuid
+  gmailThreadRecordId String   @map("gmail_thread_record_id") @db.Uuid
+  gmailMessageId      String   @unique @map("gmail_message_id") @db.VarChar(128)
+  internetMessageId   String?  @map("internet_message_id") @db.Text
+  fromName            String?  @map("from_name") @db.VarChar(255)
+  fromAddress         String?  @map("from_address") @db.VarChar(320)
+  toRecipients        Json?    @map("to_recipients")
+  ccRecipients        Json?    @map("cc_recipients")
+  subject             String?  @db.Text
+  sentAt              DateTime @map("sent_at") @db.Timestamptz(6)
+  receivedAt          DateTime @map("received_at") @db.Timestamptz(6)
+  bodyText            String?  @map("body_text") @db.Text
+  bodyHtml            String?  @map("body_html") @db.Text
+  headers             Json?
+  gmailUrl            String?  @map("gmail_url") @db.Text
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread           GmailThread      @relation(fields: [gmailThreadRecordId], references: [id], onDelete: Restrict)
+  sourceForRequest ReferralRequest? @relation("RequestSourceMessage")
+  attachments      Attachment[]
+  timelineEvents   TimelineEvent[]
+  extractionRuns   ExtractionRun[]
+
+  @@index([gmailThreadRecordId, receivedAt])
+  @@index([internetMessageId])
+  @@map("gmail_messages")
+}
+
+model ReferralRequest {
+  id                         String        @id @default(uuid()) @db.Uuid
+  gmailThreadRecordId        String        @unique @map("gmail_thread_record_id") @db.Uuid
+  sourceGmailMessageRecordId String        @unique @map("source_gmail_message_record_id") @db.Uuid
+  centreId                   String?       @map("centre_id") @db.Uuid
+  subject                    String        @db.Text
+  centreRaw                  String?       @map("centre_raw") @db.VarChar(160)
+  patientName                String?       @map("patient_name") @db.VarChar(255)
+  procedure                  String?       @db.VarChar(255)
+  procedureDetails           String?       @map("procedure_details") @db.Text
+  dischargeDate              DateTime?     @map("discharge_date") @db.Date
+  paymentType                String?       @map("payment_type") @db.VarChar(100)
+  referralHospital           String?       @map("referral_hospital") @db.VarChar(255)
+  referralDetail             String?       @map("referral_detail") @db.Text
+  totalReferralAmount        Decimal?      @map("total_referral_amount") @db.Decimal(12, 2)
+  currency                   String        @default("INR") @db.VarChar(3)
+  requestType                RequestType?  @map("request_type")
+  status                     RequestStatus @default(RECEIVED)
+  reviewStatus               ReviewStatus  @default(REQUIRED) @map("review_status")
+  extractionConfidence       Decimal?      @map("extraction_confidence") @db.Decimal(5, 4)
+  extractionSummary          Json?         @map("extraction_summary")
+  receivedAt                 DateTime      @map("received_at") @db.Timestamptz(6)
+  gmailUrl                   String        @map("gmail_url") @db.Text
+  createdAt                  DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  gmailThread    GmailThread     @relation(fields: [gmailThreadRecordId], references: [id], onDelete: Restrict)
+  sourceMessage  GmailMessage    @relation("RequestSourceMessage", fields: [sourceGmailMessageRecordId], references: [id], onDelete: Restrict)
+  centre         Centre?         @relation(fields: [centreId], references: [id], onDelete: SetNull)
+  beneficiaries  Beneficiary[]
+  attachments    Attachment[]
+  timelineEvents TimelineEvent[]
+  notes          Note[]
+  extractionRuns ExtractionRun[]
+
+  @@index([status, receivedAt])
+  @@index([centreId, receivedAt])
+  @@index([requestType])
+  @@index([paymentType])
+  @@index([reviewStatus])
+  @@index([totalReferralAmount])
+  @@map("requests")
+}
+
+model Beneficiary {
+  id             String          @id @default(uuid()) @db.Uuid
+  requestId      String          @map("request_id") @db.Uuid
+  type           BeneficiaryType @default(OTHER)
+  customType     String?         @map("custom_type") @db.VarChar(100)
+  name           String?         @db.VarChar(255)
+  contact        String?         @db.VarChar(64)
+  referralAmount Decimal?        @map("referral_amount") @db.Decimal(12, 2)
+  currency       String          @default("INR") @db.VarChar(3)
+  confidence     Decimal?        @db.Decimal(5, 4)
+  sourceEvidence Json?           @map("source_evidence")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request ReferralRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@index([type])
+  @@index([referralAmount])
+  @@map("beneficiaries")
+}
+
+model Attachment {
+  id                       String                     @id @default(uuid()) @db.Uuid
+  requestId                String                     @map("request_id") @db.Uuid
+  gmailMessageRecordId     String                     @map("gmail_message_record_id") @db.Uuid
+  gmailAttachmentId        String                     @map("gmail_attachment_id") @db.VarChar(255)
+  filename                 String                     @db.Text
+  mimeType                 String                     @map("mime_type") @db.VarChar(255)
+  sizeBytes                Int?                       @map("size_bytes")
+  sha256                   String?                    @db.VarChar(64)
+  isInline                 Boolean                    @default(false) @map("is_inline")
+  type                     AttachmentType             @default(OTHER)
+  storageStatus            AttachmentStorageStatus    @default(PENDING) @map("storage_status")
+  extractionStatus         AttachmentExtractionStatus @default(PENDING) @map("extraction_status")
+  googleDriveFileId        String?                    @map("google_drive_file_id") @db.VarChar(255)
+  previewAvailable         Boolean                    @default(false) @map("preview_available")
+  classificationConfidence Decimal?                   @map("classification_confidence") @db.Decimal(5, 4)
+  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request      ReferralRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  gmailMessage GmailMessage    @relation(fields: [gmailMessageRecordId], references: [id], onDelete: Restrict)
+
+  @@unique([gmailMessageRecordId, gmailAttachmentId])
+  @@index([requestId])
+  @@index([sha256])
+  @@index([type])
+  @@map("attachments")
+}
+
+model TimelineEvent {
+  id                         String          @id @default(uuid()) @db.Uuid
+  requestId                  String          @map("request_id") @db.Uuid
+  sourceGmailMessageRecordId String?         @map("source_gmail_message_record_id") @db.Uuid
+  status                     RequestStatus
+  occurredAt                 DateTime        @map("occurred_at") @db.Timestamptz(6)
+  detectionMethod            DetectionMethod @map("detection_method")
+  confidence                 Decimal?        @db.Decimal(5, 4)
+  evidence                   String?         @db.Text
+  metadata                   Json?
+  createdAt                  DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  request       ReferralRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sourceMessage GmailMessage?   @relation(fields: [sourceGmailMessageRecordId], references: [id], onDelete: SetNull)
+
+  @@unique([requestId, sourceGmailMessageRecordId, status])
+  @@index([requestId, occurredAt])
+  @@map("timeline")
+}
+
+model Note {
+  id        String   @id @default(uuid()) @db.Uuid
+  requestId String   @map("request_id") @db.Uuid
+  content   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  request ReferralRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("notes")
+}
+
+model Setting {
+  id             String   @id @default(uuid()) @db.Uuid
+  key            String   @unique @db.VarChar(160)
+  value          Json?
+  encryptedValue String?  @map("encrypted_value") @db.Text
+  isSecret       Boolean  @default(false) @map("is_secret")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("settings")
+}
+
+model SyncLog {
+  id                    String        @id @default(uuid()) @db.Uuid
+  trigger               SyncTrigger
+  status                SyncRunStatus @default(RUNNING)
+  startedAt             DateTime      @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt           DateTime?     @map("completed_at") @db.Timestamptz(6)
+  historyCursorBefore   String?       @map("history_cursor_before") @db.VarChar(128)
+  historyCursorAfter    String?       @map("history_cursor_after") @db.VarChar(128)
+  candidateCount        Int           @default(0) @map("candidate_count")
+  threadCount           Int           @default(0) @map("thread_count")
+  requestCreatedCount   Int           @default(0) @map("request_created_count")
+  requestUpdatedCount   Int           @default(0) @map("request_updated_count")
+  skippedDuplicateCount Int           @default(0) @map("skipped_duplicate_count")
+  failedItemCount       Int           @default(0) @map("failed_item_count")
+  metadata              Json?
+  error                 Json?
+
+  @@index([status, startedAt])
+  @@map("sync_logs")
+}
+
+model ExtractionRun {
+  id                   String              @id @default(uuid()) @db.Uuid
+  requestId            String?             @map("request_id") @db.Uuid
+  gmailMessageRecordId String?             @map("gmail_message_record_id") @db.Uuid
+  operation            ExtractionOperation
+  status               ExtractionRunStatus @default(PENDING)
+  provider             String              @db.VarChar(100)
+  model                String?             @db.VarChar(160)
+  promptVersion        String?             @map("prompt_version") @db.VarChar(100)
+  inputHash            String              @map("input_hash") @db.VarChar(64)
+  confidence           Decimal?            @db.Decimal(5, 4)
+  structuredOutput     Json?               @map("structured_output")
+  fieldConfidence      Json?               @map("field_confidence")
+  error                Json?
+  startedAt            DateTime            @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?           @map("completed_at") @db.Timestamptz(6)
+
+  request      ReferralRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  gmailMessage GmailMessage?    @relation(fields: [gmailMessageRecordId], references: [id], onDelete: SetNull)
+
+  @@index([requestId, operation, startedAt])
+  @@index([gmailMessageRecordId, operation, startedAt])
+  @@map("extraction_runs")
+}
+
+model ExportProfile {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String   @unique @db.VarChar(160)
+  isDefault           Boolean  @default(false) @map("is_default")
+  templateDriveFileId String?  @map("template_drive_file_id") @db.VarChar(255)
+  configuration       Json
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  exportJobs ExportJob[]
+
+  @@index([isDefault])
+  @@map("export_profiles")
+}
+
+model ExportJob {
+  id                String          @id @default(uuid()) @db.Uuid
+  exportProfileId   String          @map("export_profile_id") @db.Uuid
+  status            ExportJobStatus @default(QUEUED)
+  periodStart       DateTime        @map("period_start") @db.Date
+  periodEnd         DateTime        @map("period_end") @db.Date
+  filename          String?         @db.Text
+  googleDriveFileId String?         @map("google_drive_file_id") @db.VarChar(255)
+  checksum          String?         @db.VarChar(64)
+  error             Json?
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt       DateTime?       @map("completed_at") @db.Timestamptz(6)
+
+  exportProfile ExportProfile @relation(fields: [exportProfileId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([periodStart, periodEnd])
+  @@map("export_jobs")
+}
