@@ -1,10 +1,22 @@
 import { createHash } from "node:crypto";
 
-import { AttachmentExtractionStatus, AttachmentStorageStatus, CentreStatus, DetectionMethod, ExtractionOperation, ExtractionRunStatus, Prisma, RequestStatus, ReviewStatus, SyncRunStatus, SyncTrigger } from "@prisma/client";
+import { Prisma, SyncTrigger } from "@prisma/client";
+import type { DetectionMethod, RequestStatus } from "@prisma/client";
 
 import type { ApprovalDetection } from "@/server/extraction/schemas";
 
 import { detectApprovalEvents } from "@/server/approval-status/service";
+import {
+  AttachmentExtractionStatus,
+  AttachmentStorageStatus,
+  CentreStatus,
+  DetectionMethod as DetectionMethodEnum,
+  ExtractionOperation,
+  ExtractionRunStatus,
+  RequestStatus as RequestStatusEnum,
+  ReviewStatus,
+  SyncRunStatus,
+} from "@/server/db/enums";
 import { inferAttachmentType, canPreview } from "@/server/documents/classifier";
 import { archiveInDrive } from "@/server/documents/drive";
 import { analyzeReferralThread } from "@/server/gemini/analyzer";
@@ -18,7 +30,7 @@ type PersistedThread = { id: string; messageIds: Map<string, string> };
 type SyncResult = { status: SyncRunStatus; candidates: number; created: number; updated: number; duplicates: number; failures: string[] };
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
-const IMMUTABLE_REQUEST_STATUSES = new Set<RequestStatus>([RequestStatus.FINAL_APPROVED, RequestStatus.PAID]);
+const IMMUTABLE_REQUEST_STATUSES = new Set<RequestStatus>([RequestStatusEnum.FINAL_APPROVED, RequestStatusEnum.PAID]);
 
 function normalizeCentre(value: string) {
   return value.trim().toUpperCase().replace(/\s+/g, " ");
@@ -127,7 +139,7 @@ async function persistTimeline(
 ) {
   const detection = await detectApprovalEvents(thread.messages, options);
   const sourceMessageId = messageIds.get(thread.messages[0]?.gmailMessageId ?? "");
-  const receivedEvents = sourceMessageId ? [{ gmailMessageId: thread.messages[0].gmailMessageId, status: RequestStatus.RECEIVED, occurredAt: thread.messages[0].receivedAt, confidence: 1, evidence: "Original referral request received.", detectionMethod: DetectionMethod.SYSTEM }] : [];
+  const receivedEvents = sourceMessageId ? [{ gmailMessageId: thread.messages[0].gmailMessageId, status: RequestStatusEnum.RECEIVED, occurredAt: thread.messages[0].receivedAt, confidence: 1, evidence: "Original referral request received.", detectionMethod: DetectionMethodEnum.SYSTEM }] : [];
   for (const event of [...receivedEvents, ...detection.events]) {
     const sourceGmailMessageRecordId = messageIds.get(event.gmailMessageId);
     if (!sourceGmailMessageRecordId) continue;
@@ -186,6 +198,7 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
   }
 
   const buffers = await attachmentBuffers(thread);
+  console.log("About to call analyzeReferralThread");
   const analysis = await analyzeReferralThread({
     thread,
     documents: thread.messages.flatMap((message) => message.attachments).flatMap((attachment) => {
@@ -193,6 +206,7 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
       return content ? [{ filename: attachment.filename, mimeType: attachment.mimeType, content }] : [];
     }),
   });
+  console.log("Gemini analysis.value", analysis.value);
   const sourceMessageRecordId = persisted.messageIds.get(source.gmailMessageId);
   await prisma.extractionRun.create({
     data: {
@@ -247,7 +261,7 @@ async function processThread(gmailThreadId: string, options?: { force?: boolean 
   if (!options?.force) {
     const immutableExisting = await prisma.referralRequest.findFirst({
       where: {
-        status: { in: [RequestStatus.FINAL_APPROVED, RequestStatus.PAID] },
+        status: { in: [RequestStatusEnum.FINAL_APPROVED, RequestStatusEnum.PAID] },
         gmailThread: { gmailThreadId },
       },
       select: { id: true, status: true },

@@ -1,6 +1,7 @@
-import { DetectionMethod, RequestStatus } from "@prisma/client";
+import type { DetectionMethod, RequestStatus } from "@prisma/client";
 
 import type { ApprovalDetection } from "@/server/extraction/schemas";
+import { DetectionMethod as DetectionMethodEnum } from "@/server/db/enums";
 import type { GmailMessageData } from "@/server/gmail/types";
 
 import { detectRuleStatus, mostAdvancedStatus } from "./rules";
@@ -21,13 +22,13 @@ export async function detectApprovalEvents(
   const byMessage = new Map<string, ApprovalEventCandidate>();
   for (const message of messages) {
     const result = detectRuleStatus(message.subject, message.bodyText);
-    if (result) byMessage.set(message.gmailMessageId, { gmailMessageId: message.gmailMessageId, occurredAt: message.receivedAt, ...result, detectionMethod: DetectionMethod.RULES });
+    if (result) byMessage.set(message.gmailMessageId, { gmailMessageId: message.gmailMessageId, occurredAt: message.receivedAt, ...result, detectionMethod: DetectionMethodEnum.RULES });
   }
 
   for (const event of options?.aiEvents ?? []) {
     if (!byMessage.has(event.gmailMessageId)) {
       const message = messages.find((item) => item.gmailMessageId === event.gmailMessageId);
-      if (message) byMessage.set(event.gmailMessageId, { ...event, occurredAt: message.receivedAt, detectionMethod: DetectionMethod.AI });
+      if (message) byMessage.set(event.gmailMessageId, { ...event, occurredAt: message.receivedAt, detectionMethod: DetectionMethodEnum.AI });
     }
   }
 

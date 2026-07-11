@@ -1,12 +1,14 @@
-import { Prisma, RequestStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
+import type { RequestStatus } from "@prisma/client";
 
 import { prisma } from "@/server/db/client";
+import { RequestStatus as RequestStatusEnum } from "@/server/db/enums";
 
 const approvedStatuses: RequestStatus[] = [
-  RequestStatus.FINAL_APPROVED,
-  RequestStatus.SENT_TO_CENTRE,
-  RequestStatus.SENT_TO_FINANCE,
-  RequestStatus.PAID,
+  RequestStatusEnum.FINAL_APPROVED,
+  RequestStatusEnum.SENT_TO_CENTRE,
+  RequestStatusEnum.SENT_TO_FINANCE,
+  RequestStatusEnum.PAID,
 ];
 
 export type RequestFilters = {

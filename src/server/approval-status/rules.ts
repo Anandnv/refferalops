@@ -1,26 +1,28 @@
-import { RequestStatus } from "@prisma/client";
+import type { RequestStatus } from "@prisma/client";
+
+import { RequestStatus as RequestStatusEnum } from "@/server/db/enums";
 
 const statusOrder: RequestStatus[] = [
-  RequestStatus.RECEIVED,
-  RequestStatus.FORWARDED_TO_MANAGER,
-  RequestStatus.MANAGER_APPROVED,
-  RequestStatus.WAITING_MARKETING_APPROVAL,
-  RequestStatus.MARKETING_RECOMMENDED,
-  RequestStatus.FINAL_APPROVED,
-  RequestStatus.SENT_TO_CENTRE,
-  RequestStatus.SENT_TO_FINANCE,
-  RequestStatus.PAID,
+  RequestStatusEnum.RECEIVED,
+  RequestStatusEnum.FORWARDED_TO_MANAGER,
+  RequestStatusEnum.MANAGER_APPROVED,
+  RequestStatusEnum.WAITING_MARKETING_APPROVAL,
+  RequestStatusEnum.MARKETING_RECOMMENDED,
+  RequestStatusEnum.FINAL_APPROVED,
+  RequestStatusEnum.SENT_TO_CENTRE,
+  RequestStatusEnum.SENT_TO_FINANCE,
+  RequestStatusEnum.PAID,
 ];
 
 const patterns: Array<[RequestStatus, RegExp]> = [
-  [RequestStatus.PAID, /\b(paid|payment (?:has been )?released|payment processed|settled)\b/i],
-  [RequestStatus.SENT_TO_FINANCE, /\b(sent|forwarded|submitted).{0,60}\bfinance\b|\bfinance.{0,60}\b(sent|forwarded|submitted)\b/i],
-  [RequestStatus.SENT_TO_CENTRE, /\b(sent|forwarded|communicated).{0,60}\bcentre\b|\bcentre.{0,60}\b(sent|forwarded|communicated)\b/i],
-  [RequestStatus.FINAL_APPROVED, /\b(final approval|finally approved|approved for payment|approval granted)\b/i],
-  [RequestStatus.MARKETING_RECOMMENDED, /\b(marketing (?:has )?recommended|recommended by marketing|marketing recommendation)\b/i],
-  [RequestStatus.WAITING_MARKETING_APPROVAL, /\b(waiting|awaiting|pending).{0,60}\bmarketing\b/i],
-  [RequestStatus.MANAGER_APPROVED, /\b(manager|management).{0,60}\bapproved\b|\bapproved by (?:the )?manager\b/i],
-  [RequestStatus.FORWARDED_TO_MANAGER, /\b(forwarded|sent).{0,60}\bmanager\b|\bmanager approval\b/i],
+  [RequestStatusEnum.PAID, /\b(paid|payment (?:has been )?released|payment processed|settled)\b/i],
+  [RequestStatusEnum.SENT_TO_FINANCE, /\b(sent|forwarded|submitted).{0,60}\bfinance\b|\bfinance.{0,60}\b(sent|forwarded|submitted)\b/i],
+  [RequestStatusEnum.SENT_TO_CENTRE, /\b(sent|forwarded|communicated).{0,60}\bcentre\b|\bcentre.{0,60}\b(sent|forwarded|communicated)\b/i],
+  [RequestStatusEnum.FINAL_APPROVED, /\b(final approval|finally approved|approved for payment|approval granted)\b/i],
+  [RequestStatusEnum.MARKETING_RECOMMENDED, /\b(marketing (?:has )?recommended|recommended by marketing|marketing recommendation)\b/i],
+  [RequestStatusEnum.WAITING_MARKETING_APPROVAL, /\b(waiting|awaiting|pending).{0,60}\bmarketing\b/i],
+  [RequestStatusEnum.MANAGER_APPROVED, /\b(manager|management).{0,60}\bapproved\b|\bapproved by (?:the )?manager\b/i],
+  [RequestStatusEnum.FORWARDED_TO_MANAGER, /\b(forwarded|sent).{0,60}\bmanager\b|\bmanager approval\b/i],
 ];
 
 export function detectRuleStatus(subject?: string, body?: string) {
@@ -37,5 +39,5 @@ export function statusRank(status: RequestStatus) {
 }
 
 export function mostAdvancedStatus(statuses: RequestStatus[]) {
-  return statuses.reduce<RequestStatus>((current, status) => (statusRank(status) > statusRank(current) ? status : current), RequestStatus.RECEIVED);
+  return statuses.reduce<RequestStatus>((current, status) => (statusRank(status) > statusRank(current) ? status : current), RequestStatusEnum.RECEIVED);
 }
