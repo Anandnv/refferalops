@@ -96,3 +96,31 @@ export const approvalJsonSchema = {
     },
   },
 };
+
+export const threadAnalysisJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "isReferralIncentive",
+    "rationale",
+    "requestType",
+    "centre",
+    "patientName",
+    "procedure",
+    "procedureDetails",
+    "dischargeDate",
+    "paymentType",
+    "referralHospital",
+    "referralDetail",
+    "beneficiaries",
+    "confidence",
+    "fieldConfidence",
+    "uncertainFields",
+    "approvalEvents",
+  ],
+  properties: {
+    ...referralJsonSchema.properties,
+    rationale: { type: "string" },
+    approvalEvents: approvalJsonSchema.properties.events,
+  },
+};

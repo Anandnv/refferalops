@@ -2,10 +2,12 @@ import { createHash } from "node:crypto";
 
 import { AttachmentExtractionStatus, AttachmentStorageStatus, CentreStatus, DetectionMethod, ExtractionOperation, ExtractionRunStatus, Prisma, RequestStatus, ReviewStatus, SyncRunStatus, SyncTrigger } from "@prisma/client";
 
+import type { ApprovalDetection } from "@/server/extraction/schemas";
+
 import { detectApprovalEvents } from "@/server/approval-status/service";
 import { inferAttachmentType, canPreview } from "@/server/documents/classifier";
 import { archiveInDrive } from "@/server/documents/drive";
-import { classifyReferralCandidate, extractReferralRequest } from "@/server/extraction/openai";
+import { analyzeReferralThread } from "@/server/extraction/openai";
 import { findCandidateThreadIds, getGmailAttachment, getGmailThread } from "@/server/gmail/client";
 import type { GmailAttachmentData, GmailThreadData } from "@/server/gmail/types";
 import { prisma } from "@/server/db/client";
@@ -115,8 +117,13 @@ async function persistAttachments(requestId: string, thread: GmailThreadData, me
   }
 }
 
-async function persistTimeline(requestId: string, thread: GmailThreadData, messageIds: Map<string, string>) {
-  const detection = await detectApprovalEvents(thread.messages);
+async function persistTimeline(
+  requestId: string,
+  thread: GmailThreadData,
+  messageIds: Map<string, string>,
+  options?: { aiEvents?: ApprovalDetection["events"] },
+) {
+  const detection = await detectApprovalEvents(thread.messages, options);
   const sourceMessageId = messageIds.get(thread.messages[0]?.gmailMessageId ?? "");
   const receivedEvents = sourceMessageId ? [{ gmailMessageId: thread.messages[0].gmailMessageId, status: RequestStatus.RECEIVED, occurredAt: thread.messages[0].receivedAt, confidence: 1, evidence: "Original referral request received.", detectionMethod: DetectionMethod.SYSTEM }] : [];
   for (const event of [...receivedEvents, ...detection.events]) {
@@ -131,42 +138,40 @@ async function persistTimeline(requestId: string, thread: GmailThreadData, messa
   await prisma.referralRequest.update({ where: { id: requestId }, data: { status: detection.status } });
 }
 
-async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread) {
+async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread, input: { threadExistsInDatabase: boolean }) {
   const source = thread.messages[0];
   if (!source) return null;
-  const classification = await classifyReferralCandidate({ subject: source.subject, fromAddress: source.fromAddress, bodyText: source.bodyText });
-  await prisma.extractionRun.create({
-    data: {
-      gmailMessageRecordId: persisted.messageIds.get(source.gmailMessageId),
-      operation: ExtractionOperation.CANDIDATE_CLASSIFICATION,
-      status: ExtractionRunStatus.SUCCEEDED,
-      provider: "openai",
-      model: classification.model,
-      inputHash: extractionHash(thread),
-      confidence: classification.value.confidence,
-      structuredOutput: classification.value as Prisma.InputJsonValue,
-      completedAt: new Date(),
-    },
-  });
-  if (!classification.value.isReferralIncentive) return null;
 
   const buffers = await attachmentBuffers(thread);
-  const extraction = await extractReferralRequest({
-    subject: source.subject,
-    fromAddress: source.fromAddress,
-    bodyText: source.bodyText,
-    bodyHtml: source.bodyHtml,
+  const analysis = await analyzeReferralThread({
+    thread,
+    threadExistsInDatabase: input.threadExistsInDatabase,
     documents: thread.messages.flatMap((message) => message.attachments).flatMap((attachment) => {
       const content = buffers.get(`${attachment.gmailMessageId}:${attachment.gmailAttachmentId}`);
       return content ? [{ filename: attachment.filename, mimeType: attachment.mimeType, content }] : [];
     }),
   });
-  if (!extraction.value.isReferralIncentive) return null;
-  const settings = await getGeneralSettings();
-  const centre = await resolveCentre(extraction.value.centre);
   const sourceMessageRecordId = persisted.messageIds.get(source.gmailMessageId);
+  await prisma.extractionRun.create({
+    data: {
+      gmailMessageRecordId: sourceMessageRecordId,
+      operation: ExtractionOperation.REQUEST_EXTRACTION,
+      status: ExtractionRunStatus.SUCCEEDED,
+      provider: "openai",
+      model: analysis.model,
+      inputHash: extractionHash(thread),
+      confidence: analysis.value.confidence,
+      structuredOutput: analysis.value as Prisma.InputJsonValue,
+      fieldConfidence: analysis.value.fieldConfidence as Prisma.InputJsonValue,
+      completedAt: new Date(),
+    },
+  });
+  if (!analysis.value.isReferralIncentive) return null;
+
+  const settings = await getGeneralSettings();
+  const centre = await resolveCentre(analysis.value.centre);
   if (!sourceMessageRecordId) throw new Error("Could not persist the source Gmail message.");
-  const total = extraction.value.beneficiaries.reduce((sum, beneficiary) => sum + (beneficiary.referralAmount ?? 0), 0);
+  const total = analysis.value.beneficiaries.reduce((sum, beneficiary) => sum + (beneficiary.referralAmount ?? 0), 0);
   const request = await prisma.referralRequest.create({
     data: {
       gmailThreadRecordId: persisted.id,
@@ -174,45 +179,31 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
       centreId: centre.centreId,
       centreRaw: centre.centreRaw,
       subject: source.subject ?? thread.subject ?? "Referral Incentive",
-      patientName: extraction.value.patientName,
-      procedure: extraction.value.procedure,
-      procedureDetails: extraction.value.procedureDetails,
-      dischargeDate: extraction.value.dischargeDate ? new Date(`${extraction.value.dischargeDate}T00:00:00.000Z`) : null,
-      paymentType: extraction.value.paymentType,
-      referralHospital: extraction.value.referralHospital,
-      referralDetail: extraction.value.referralDetail,
+      patientName: analysis.value.patientName,
+      procedure: analysis.value.procedure,
+      procedureDetails: analysis.value.procedureDetails,
+      dischargeDate: analysis.value.dischargeDate ? new Date(`${analysis.value.dischargeDate}T00:00:00.000Z`) : null,
+      paymentType: analysis.value.paymentType,
+      referralHospital: analysis.value.referralHospital,
+      referralDetail: analysis.value.referralDetail,
       totalReferralAmount: total || null,
-      requestType: extraction.value.requestType ?? (extraction.value.beneficiaries.length > 1 ? "SPECIAL" : "NORMAL"),
-      reviewStatus: extraction.value.confidence >= settings.confidenceThreshold && extraction.value.uncertainFields.length === 0 ? ReviewStatus.NOT_REQUIRED : ReviewStatus.REQUIRED,
-      extractionConfidence: extraction.value.confidence,
-      extractionSummary: { uncertainFields: extraction.value.uncertainFields, fieldConfidence: extraction.value.fieldConfidence } as Prisma.InputJsonValue,
+      requestType: analysis.value.requestType ?? (analysis.value.beneficiaries.length > 1 ? "SPECIAL" : "NORMAL"),
+      reviewStatus: analysis.value.confidence >= settings.confidenceThreshold && analysis.value.uncertainFields.length === 0 ? ReviewStatus.NOT_REQUIRED : ReviewStatus.REQUIRED,
+      extractionConfidence: analysis.value.confidence,
+      extractionSummary: { uncertainFields: analysis.value.uncertainFields, fieldConfidence: analysis.value.fieldConfidence } as Prisma.InputJsonValue,
       receivedAt: source.receivedAt,
       gmailUrl: source.gmailUrl,
-      beneficiaries: { create: extraction.value.beneficiaries.map((beneficiary) => ({ type: beneficiary.type, customType: beneficiary.customType, name: beneficiary.name, contact: beneficiary.contact, referralAmount: beneficiary.referralAmount, confidence: beneficiary.confidence, sourceEvidence: { evidence: beneficiary.evidence } })) },
-    },
-  });
-  await prisma.extractionRun.create({
-    data: {
-      requestId: request.id,
-      gmailMessageRecordId: sourceMessageRecordId,
-      operation: ExtractionOperation.REQUEST_EXTRACTION,
-      status: ExtractionRunStatus.SUCCEEDED,
-      provider: "openai",
-      model: extraction.model,
-      inputHash: extractionHash(thread),
-      confidence: extraction.value.confidence,
-      structuredOutput: extraction.value as Prisma.InputJsonValue,
-      fieldConfidence: extraction.value.fieldConfidence as Prisma.InputJsonValue,
-      completedAt: new Date(),
+      beneficiaries: { create: analysis.value.beneficiaries.map((beneficiary) => ({ type: beneficiary.type, customType: beneficiary.customType, name: beneficiary.name, contact: beneficiary.contact, referralAmount: beneficiary.referralAmount, confidence: beneficiary.confidence, sourceEvidence: { evidence: beneficiary.evidence } })) },
     },
   });
   await persistAttachments(request.id, thread, persisted.messageIds, buffers);
-  await persistTimeline(request.id, thread, persisted.messageIds);
+  await persistTimeline(request.id, thread, persisted.messageIds, { aiEvents: analysis.value.approvalEvents });
   return request;
 }
 
 async function processThread(gmailThreadId: string) {
   const thread = await getGmailThread(gmailThreadId);
+  const existingThread = await prisma.gmailThread.findUnique({ where: { gmailThreadId } });
   const persisted = await persistThread(thread);
   const existing = await prisma.referralRequest.findUnique({ where: { gmailThreadRecordId: persisted.id } });
   if (existing) {
@@ -221,7 +212,7 @@ async function processThread(gmailThreadId: string) {
     await persistTimeline(existing.id, thread, persisted.messageIds);
     return "updated" as const;
   }
-  const created = await createRequestFromThread(thread, persisted);
+  const created = await createRequestFromThread(thread, persisted, { threadExistsInDatabase: Boolean(existingThread) });
   return created ? "created" as const : "ignored" as const;
 }
 

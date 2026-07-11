@@ -56,6 +56,12 @@ export const approvalDetectionSchema = z.object({
   ),
 });
 
+export const referralThreadAnalysisSchema = referralExtractionSchema.extend({
+  rationale: z.string().max(500),
+  approvalEvents: approvalDetectionSchema.shape.events,
+});
+
 export type ReferralExtraction = z.infer<typeof referralExtractionSchema>;
 export type CandidateClassification = z.infer<typeof candidateClassificationSchema>;
 export type ApprovalDetection = z.infer<typeof approvalDetectionSchema>;
+export type ReferralThreadAnalysis = z.infer<typeof referralThreadAnalysisSchema>;
