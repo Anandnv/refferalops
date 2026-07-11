@@ -1,48 +1,52 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldSkipGeminiAnalysis, subjectClearlyNotKhReferral, threadHasNoAnalyzableContent } from "./client";
+import { shouldSkipGeminiAnalysis, subjectContainsKh, threadHasGeminiSignals } from "./client";
 
-describe("subjectClearlyNotKhReferral", () => {
-  it("skips subjects without KH context", () => {
-    expect(subjectClearlyNotKhReferral("Monthly operations update")).toBe(true);
-    expect(subjectClearlyNotKhReferral(undefined)).toBe(true);
+describe("subjectContainsKh", () => {
+  it("detects KH context in the subject", () => {
+    expect(subjectContainsKh("KH Referral Incentive - Patient A")).toBe(true);
+    expect(subjectContainsKh("KHOPS incentive request")).toBe(true);
   });
 
-  it("keeps referral subjects", () => {
-    expect(subjectClearlyNotKhReferral("KH Referral Incentive - Patient A")).toBe(false);
-    expect(subjectClearlyNotKhReferral("KHOPS incentive request")).toBe(false);
-  });
-
-  it("skips payment-only KH subjects", () => {
-    expect(subjectClearlyNotKhReferral("KH payment confirmation")).toBe(true);
-  });
-
-  it("skips KH threads without referral-specific subject signals", () => {
-    expect(subjectClearlyNotKhReferral("KH manager approval pending")).toBe(true);
-    expect(subjectClearlyNotKhReferral("KH update")).toBe(true);
+  it("ignores subjects without KH context", () => {
+    expect(subjectContainsKh("Monthly operations update")).toBe(false);
+    expect(subjectContainsKh(undefined)).toBe(false);
   });
 });
 
-describe("threadHasNoAnalyzableContent", () => {
-  it("skips empty threads without attachments", () => {
+describe("threadHasGeminiSignals", () => {
+  it("returns false for empty threads without allowed signals", () => {
     expect(
-      threadHasNoAnalyzableContent({
+      threadHasGeminiSignals({
         messages: [{ bodyText: "   ", attachments: [] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true for referral body keywords", () => {
+    expect(
+      threadHasGeminiSignals({
+        messages: [{ bodyText: "Referral incentive for patient", attachments: [] }],
       }),
     ).toBe(true);
   });
 
-  it("keeps threads with referral body or attachments", () => {
+  it("returns true for attachment-only threads", () => {
     expect(
-      threadHasNoAnalyzableContent({
-        messages: [{ bodyText: "Referral incentive for patient", attachments: [] }],
-      }),
-    ).toBe(false);
-    expect(
-      threadHasNoAnalyzableContent({
+      threadHasGeminiSignals({
         messages: [{ bodyText: "", attachments: [{ mimeType: "application/pdf" }] }],
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      threadHasGeminiSignals({
+        messages: [{ bodyText: "", attachments: [{ mimeType: "image/png" }] }],
+      }),
+    ).toBe(true);
+    expect(
+      threadHasGeminiSignals({
+        messages: [{ bodyText: "", attachments: [{ mimeType: "application/msword" }] }],
+      }),
+    ).toBe(true);
   });
 });
 
@@ -56,12 +60,30 @@ describe("shouldSkipGeminiAnalysis", () => {
     expect(result.skip).toBe(true);
   });
 
-  it("allows first-time referral threads with content", () => {
+  it("allows first-time KH subject threads", () => {
     const result = shouldSkipGeminiAnalysis({
       threadExistsInDatabase: false,
-      subject: "KH Referral Incentive",
-      thread: { messages: [{ bodyText: "Referral details", attachments: [] }] },
+      subject: "KH manager approval pending",
+      thread: { messages: [{ bodyText: "", attachments: [] }] },
     });
     expect(result.skip).toBe(false);
+  });
+
+  it("allows first-time threads with attachments even without KH subject", () => {
+    const result = shouldSkipGeminiAnalysis({
+      threadExistsInDatabase: false,
+      subject: "Fwd",
+      thread: { messages: [{ bodyText: "", attachments: [{ mimeType: "application/pdf" }] }] },
+    });
+    expect(result.skip).toBe(false);
+  });
+
+  it("skips only when all configured signals are absent", () => {
+    const result = shouldSkipGeminiAnalysis({
+      threadExistsInDatabase: false,
+      subject: "Monthly operations update",
+      thread: { messages: [{ bodyText: "Please review", attachments: [] }] },
+    });
+    expect(result.skip).toBe(true);
   });
 });

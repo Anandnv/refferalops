@@ -30,35 +30,31 @@ export function stripMarkdownJson(text: string) {
   return cleaned.trim();
 }
 
-const KH_REFERRAL_SUBJECT_SIGNALS = [
-  "referral",
-  "incentive",
-  "khops",
-  "beneficiary",
-  "patient",
-  "procedure",
-  "discharge",
-];
+const BODY_GEMINI_SIGNALS = ["referral", "incentive", "doctor", "ambulance"];
 
-export function subjectClearlyNotKhReferral(subject?: string) {
+export function subjectContainsKh(subject?: string) {
   const normalized = (subject ?? "").trim().toLowerCase();
-  if (!normalized) return true;
-  if (!/\bkh\b|khops/.test(normalized)) return true;
-  if (KH_REFERRAL_SUBJECT_SIGNALS.some((signal) => normalized.includes(signal))) return false;
-  return true;
+  if (!normalized) return false;
+  return /\bkh\b|khops/.test(normalized);
 }
 
-export function threadHasNoAnalyzableContent(thread: {
+export function threadHasGeminiSignals(thread: {
   messages: Array<{ bodyText?: string; attachments: Array<{ mimeType: string }> }>;
 }) {
   const source = thread.messages[0];
-  if (!source) return true;
-  const hasRelevantAttachments = thread.messages.some((message) =>
-    message.attachments.some(
-      (attachment) => attachment.mimeType.startsWith("image/") || attachment.mimeType === "application/pdf",
-    ),
+  if (!source) return false;
+
+  const body = (source.bodyText ?? "").toLowerCase();
+  const hasAttachment = thread.messages.some((message) => message.attachments.length > 0);
+  const hasPdf = thread.messages.some((message) =>
+    message.attachments.some((attachment) => attachment.mimeType === "application/pdf"),
   );
-  return !hasRelevantAttachments && !(source.bodyText ?? "").trim();
+  const hasImage = thread.messages.some((message) =>
+    message.attachments.some((attachment) => attachment.mimeType.startsWith("image/")),
+  );
+  const hasBodySignal = BODY_GEMINI_SIGNALS.some((signal) => body.includes(signal));
+
+  return hasAttachment || hasPdf || hasImage || hasBodySignal;
 }
 
 export function shouldSkipGeminiAnalysis(input: {
@@ -69,11 +65,9 @@ export function shouldSkipGeminiAnalysis(input: {
   if (input.threadExistsInDatabase) {
     return { skip: true, reason: "Skipped Gemini: Gmail thread already exists in database." };
   }
-  if (subjectClearlyNotKhReferral(input.subject)) {
-    return { skip: true, reason: "Skipped Gemini: subject does not relate to KH referral requests." };
-  }
-  if (threadHasNoAnalyzableContent(input.thread)) {
-    return { skip: true, reason: "Skipped Gemini: no attachment and email body is empty." };
+  const hasSignal = subjectContainsKh(input.subject) || threadHasGeminiSignals(input.thread);
+  if (!hasSignal) {
+    return { skip: true, reason: "Skipped Gemini: no KH/referral signals found in subject, body, or attachments." };
   }
   return { skip: false as const };
 }
