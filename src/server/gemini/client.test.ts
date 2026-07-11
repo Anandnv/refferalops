@@ -51,18 +51,8 @@ describe("threadHasGeminiSignals", () => {
 });
 
 describe("shouldSkipGeminiAnalysis", () => {
-  it("skips when the Gmail thread already exists", () => {
-    const result = shouldSkipGeminiAnalysis({
-      threadExistsInDatabase: true,
-      subject: "KH Referral Incentive",
-      thread: { messages: [{ bodyText: "Referral details", attachments: [] }] },
-    });
-    expect(result.skip).toBe(true);
-  });
-
   it("allows first-time KH subject threads", () => {
     const result = shouldSkipGeminiAnalysis({
-      threadExistsInDatabase: false,
       subject: "KH manager approval pending",
       thread: { messages: [{ bodyText: "", attachments: [] }] },
     });
@@ -71,16 +61,22 @@ describe("shouldSkipGeminiAnalysis", () => {
 
   it("allows first-time threads with attachments even without KH subject", () => {
     const result = shouldSkipGeminiAnalysis({
-      threadExistsInDatabase: false,
       subject: "Fwd",
       thread: { messages: [{ bodyText: "", attachments: [{ mimeType: "application/pdf" }] }] },
     });
     expect(result.skip).toBe(false);
   });
 
+  it("does not skip merely because the Gmail thread record may already exist", () => {
+    const result = shouldSkipGeminiAnalysis({
+      subject: "KH Referral Incentive",
+      thread: { messages: [{ bodyText: "Referral details", attachments: [] }] },
+    });
+    expect(result.skip).toBe(false);
+  });
+
   it("skips only when all configured signals are absent", () => {
     const result = shouldSkipGeminiAnalysis({
-      threadExistsInDatabase: false,
       subject: "Monthly operations update",
       thread: { messages: [{ bodyText: "Please review", attachments: [] }] },
     });

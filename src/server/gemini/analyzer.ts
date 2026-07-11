@@ -43,12 +43,10 @@ function skippedAnalysis(reason: string): ReferralThreadAnalysis {
 export async function analyzeReferralThread(input: {
   thread: GmailThreadData;
   documents: DocumentInput[];
-  threadExistsInDatabase: boolean;
 }) {
   const source = input.thread.messages[0];
   const skip = shouldSkipGeminiAnalysis({
     subject: source?.subject ?? input.thread.subject,
-    threadExistsInDatabase: input.threadExistsInDatabase,
     thread: input.thread,
   });
   if (skip.skip) {

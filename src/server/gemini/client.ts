@@ -59,12 +59,8 @@ export function threadHasGeminiSignals(thread: {
 
 export function shouldSkipGeminiAnalysis(input: {
   subject?: string;
-  threadExistsInDatabase: boolean;
   thread: { messages: Array<{ bodyText?: string; attachments: Array<{ mimeType: string }> }> };
 }) {
-  if (input.threadExistsInDatabase) {
-    return { skip: true, reason: "Skipped Gemini: Gmail thread already exists in database." };
-  }
   const hasSignal = subjectContainsKh(input.subject) || threadHasGeminiSignals(input.thread);
   if (!hasSignal) {
     return { skip: true, reason: "Skipped Gemini: no KH/referral signals found in subject, body, or attachments." };

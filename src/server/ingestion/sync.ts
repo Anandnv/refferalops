@@ -140,13 +140,12 @@ async function persistTimeline(
   await prisma.referralRequest.update({ where: { id: requestId }, data: { status: detection.status } });
 }
 
-async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread, input: { threadExistsInDatabase: boolean }) {
+async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread) {
   const source = thread.messages[0];
   if (!source) return null;
 
   const skip = shouldSkipGeminiAnalysis({
     subject: source.subject ?? thread.subject,
-    threadExistsInDatabase: input.threadExistsInDatabase,
     thread,
   });
 
@@ -189,7 +188,6 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
   const buffers = await attachmentBuffers(thread);
   const analysis = await analyzeReferralThread({
     thread,
-    threadExistsInDatabase: input.threadExistsInDatabase,
     documents: thread.messages.flatMap((message) => message.attachments).flatMap((attachment) => {
       const content = buffers.get(`${attachment.gmailMessageId}:${attachment.gmailAttachmentId}`);
       return content ? [{ filename: attachment.filename, mimeType: attachment.mimeType, content }] : [];
@@ -260,7 +258,6 @@ async function processThread(gmailThreadId: string, options?: { force?: boolean 
   }
 
   const thread = await getGmailThread(gmailThreadId);
-  const existingThread = await prisma.gmailThread.findUnique({ where: { gmailThreadId } });
   const persisted = await persistThread(thread);
   const existing = await prisma.referralRequest.findUnique({ where: { gmailThreadRecordId: persisted.id } });
   if (existing) {
@@ -269,7 +266,7 @@ async function processThread(gmailThreadId: string, options?: { force?: boolean 
     await persistTimeline(existing.id, thread, persisted.messageIds);
     return "updated" as const;
   }
-  const created = await createRequestFromThread(thread, persisted, { threadExistsInDatabase: Boolean(existingThread) });
+  const created = await createRequestFromThread(thread, persisted);
   return created ? "created" as const : "ignored" as const;
 }
 
