@@ -46,9 +46,6 @@ export async function completeGoogleAuthorization(code: string) {
   await saveGoogleRefreshToken(tokens.tokens.refresh_token);
 }
 
-function toGmailDate(date: Date) {
-  return date.toISOString().slice(0, 10).replaceAll("-", "/");
-}
 
 export async function findCandidateThreadIds(lastSuccessfulSyncAt?: Date | null) {
   const { gmail } = await getAuthenticatedGoogleClients();
@@ -56,7 +53,8 @@ export async function findCandidateThreadIds(lastSuccessfulSyncAt?: Date | null)
   const boundary = lastSuccessfulSyncAt
     ? new Date(lastSuccessfulSyncAt.getTime() - 24 * 60 * 60 * 1000)
     : new Date(Date.now() - settings.initialSyncDays * 24 * 60 * 60 * 1000);
-  const query = `in:anywhere subject:KH subject:"Referral Incentive" after:${toGmailDate(boundary)}`;
+  const daysBack = Math.max(1, Math.ceil((Date.now() - boundary.getTime()) / (24 * 60 * 60 * 1000)));
+  const query = `in:anywhere subject:KH newer_than:${daysBack}d`;
 
   const result = await gmail.users.messages.list({ userId: "me", q: query, maxResults: 100 });
   return [...new Set((result.data.messages ?? []).flatMap((message) => message.threadId ?? []))];
