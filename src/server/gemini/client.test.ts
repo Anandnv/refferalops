@@ -16,6 +16,11 @@ describe("subjectClearlyNotKhReferral", () => {
   it("skips payment-only KH subjects", () => {
     expect(subjectClearlyNotKhReferral("KH payment confirmation")).toBe(true);
   });
+
+  it("skips KH threads without referral-specific subject signals", () => {
+    expect(subjectClearlyNotKhReferral("KH manager approval pending")).toBe(true);
+    expect(subjectClearlyNotKhReferral("KH update")).toBe(true);
+  });
 });
 
 describe("threadHasNoAnalyzableContent", () => {

@@ -7,7 +7,8 @@ import type { ApprovalDetection } from "@/server/extraction/schemas";
 import { detectApprovalEvents } from "@/server/approval-status/service";
 import { inferAttachmentType, canPreview } from "@/server/documents/classifier";
 import { archiveInDrive } from "@/server/documents/drive";
-import { analyzeReferralThread } from "@/server/extraction/openai";
+import { analyzeReferralThread } from "@/server/gemini/analyzer";
+import { shouldSkipGeminiAnalysis } from "@/server/gemini/client";
 import { findCandidateThreadIds, getGmailAttachment, getGmailThread } from "@/server/gmail/client";
 import type { GmailAttachmentData, GmailThreadData } from "@/server/gmail/types";
 import { prisma } from "@/server/db/client";
@@ -142,6 +143,48 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
   const source = thread.messages[0];
   if (!source) return null;
 
+  const skip = shouldSkipGeminiAnalysis({
+    subject: source.subject ?? thread.subject,
+    threadExistsInDatabase: input.threadExistsInDatabase,
+    thread,
+  });
+
+  if (skip.skip) {
+    const sourceMessageRecordId = persisted.messageIds.get(source.gmailMessageId);
+    await prisma.extractionRun.create({
+      data: {
+        gmailMessageRecordId: sourceMessageRecordId,
+        operation: ExtractionOperation.REQUEST_EXTRACTION,
+        status: ExtractionRunStatus.SUCCEEDED,
+        provider: "gemini",
+        model: "skipped",
+        inputHash: extractionHash(thread),
+        confidence: 1,
+        structuredOutput: {
+          isReferralIncentive: false,
+          rationale: skip.reason,
+          requestType: null,
+          centre: null,
+          patientName: null,
+          procedure: null,
+          procedureDetails: null,
+          dischargeDate: null,
+          paymentType: null,
+          referralHospital: null,
+          referralDetail: null,
+          beneficiaries: [],
+          confidence: 1,
+          fieldConfidence: {},
+          uncertainFields: [],
+          approvalEvents: [],
+        } as Prisma.InputJsonValue,
+        fieldConfidence: {} as Prisma.InputJsonValue,
+        completedAt: new Date(),
+      },
+    });
+    return null;
+  }
+
   const buffers = await attachmentBuffers(thread);
   const analysis = await analyzeReferralThread({
     thread,
@@ -157,7 +200,7 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
       gmailMessageRecordId: sourceMessageRecordId,
       operation: ExtractionOperation.REQUEST_EXTRACTION,
       status: ExtractionRunStatus.SUCCEEDED,
-      provider: "openai",
+      provider: "gemini",
       model: analysis.model,
       inputHash: extractionHash(thread),
       confidence: analysis.value.confidence,
@@ -225,7 +268,7 @@ export async function runReferralSync(input: { trigger: SyncTrigger; force?: boo
     return { status: SyncRunStatus.SKIPPED, candidates: 0, created: 0, updated: 0, duplicates: 0, failures: [] };
   }
   if (!settings.driveFolderId || !await getOpenAiApiKey()) {
-    const message = !settings.driveFolderId ? "Set a Google Drive folder ID in Settings before syncing." : "Set an OpenAI API key in Settings before syncing.";
+    const message = !settings.driveFolderId ? "Set a Google Drive folder ID in Settings before syncing." : "Set a Gemini API key in Settings before syncing.";
     await prisma.syncLog.update({ where: { id: syncLog.id }, data: { status: SyncRunStatus.FAILED, completedAt: new Date(), error: { message } } });
     throw new Error(message);
   }

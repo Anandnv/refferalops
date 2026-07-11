@@ -40,17 +40,12 @@ const KH_REFERRAL_SUBJECT_SIGNALS = [
   "discharge",
 ];
 
-const NON_REFERRAL_SUBJECT_PATTERNS = [
-  /\b(payment processed|payment released|has been paid|payment confirmation)\b/i,
-  /\b(newsletter|notification only|system notification)\b/i,
-];
-
 export function subjectClearlyNotKhReferral(subject?: string) {
   const normalized = (subject ?? "").trim().toLowerCase();
   if (!normalized) return true;
   if (!/\bkh\b|khops/.test(normalized)) return true;
   if (KH_REFERRAL_SUBJECT_SIGNALS.some((signal) => normalized.includes(signal))) return false;
-  return NON_REFERRAL_SUBJECT_PATTERNS.some((pattern) => pattern.test(normalized));
+  return true;
 }
 
 export function threadHasNoAnalyzableContent(thread: {
@@ -130,19 +125,8 @@ export async function generateStructuredJson<T>(input: {
     return response.text;
   };
 
-  let rawText: string;
-  try {
-    rawText = await request();
-    return { value: input.parser.parse(JSON.parse(stripMarkdownJson(rawText))), model };
-  } catch (firstError) {
-    try {
-      rawText = await request();
-      return { value: input.parser.parse(JSON.parse(stripMarkdownJson(rawText))), model };
-    } catch (secondError) {
-      const message = secondError instanceof Error ? secondError.message : "Gemini structured output failed.";
-      throw new Error(message || (firstError instanceof Error ? firstError.message : "Gemini structured output failed."));
-    }
-  }
+  const rawText = await request();
+  return { value: input.parser.parse(JSON.parse(stripMarkdownJson(rawText))), model };
 }
 
 export function documentToPart(document: { filename: string; mimeType: string; content: Buffer }): Part | null {
