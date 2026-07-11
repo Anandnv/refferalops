@@ -18,6 +18,7 @@ type PersistedThread = { id: string; messageIds: Map<string, string> };
 type SyncResult = { status: SyncRunStatus; candidates: number; created: number; updated: number; duplicates: number; failures: string[] };
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const IMMUTABLE_REQUEST_STATUSES = new Set<RequestStatus>([RequestStatus.FINAL_APPROVED, RequestStatus.PAID]);
 
 function normalizeCentre(value: string) {
   return value.trim().toUpperCase().replace(/\s+/g, " ");
@@ -244,7 +245,20 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
   return request;
 }
 
-async function processThread(gmailThreadId: string) {
+async function processThread(gmailThreadId: string, options?: { force?: boolean }) {
+  if (!options?.force) {
+    const immutableExisting = await prisma.referralRequest.findFirst({
+      where: {
+        status: { in: [RequestStatus.FINAL_APPROVED, RequestStatus.PAID] },
+        gmailThread: { gmailThreadId },
+      },
+      select: { id: true, status: true },
+    });
+    if (immutableExisting && IMMUTABLE_REQUEST_STATUSES.has(immutableExisting.status)) {
+      return "immutable" as const;
+    }
+  }
+
   const thread = await getGmailThread(gmailThreadId);
   const existingThread = await prisma.gmailThread.findUnique({ where: { gmailThreadId } });
   const persisted = await persistThread(thread);
@@ -277,10 +291,10 @@ export async function runReferralSync(input: { trigger: SyncTrigger; force?: boo
   const result: SyncResult = { status: SyncRunStatus.SUCCEEDED, candidates: candidateIds.length, created: 0, updated: 0, duplicates: 0, failures: [] };
   for (const threadId of candidateIds) {
     try {
-      const outcome = await processThread(threadId);
+      const outcome = await processThread(threadId, { force: input.force });
       if (outcome === "created") result.created += 1;
       if (outcome === "updated") result.updated += 1;
-      if (outcome === "ignored") result.duplicates += 1;
+      if (outcome === "ignored" || outcome === "immutable") result.duplicates += 1;
     } catch (error) {
       result.failures.push(error instanceof Error ? error.message : "Unknown sync error");
     }
