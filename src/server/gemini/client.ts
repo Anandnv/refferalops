@@ -49,16 +49,9 @@ export function threadHasGeminiSignals(thread: {
   if (!source) return false;
 
   const body = (source.bodyText ?? "").toLowerCase();
-  const hasAttachment = thread.messages.some((message) => message.attachments.length > 0);
-  const hasPdf = thread.messages.some((message) =>
-    message.attachments.some((attachment) => attachment.mimeType === "application/pdf"),
-  );
-  const hasImage = thread.messages.some((message) =>
-    message.attachments.some((attachment) => attachment.mimeType.startsWith("image/")),
-  );
   const hasBodySignal = BODY_GEMINI_SIGNALS.some((signal) => body.includes(signal));
 
-  return hasAttachment || hasPdf || hasImage || hasBodySignal;
+  return hasBodySignal;
 }
 
 export function shouldSkipGeminiAnalysis(input: {
@@ -67,7 +60,7 @@ export function shouldSkipGeminiAnalysis(input: {
 }) {
   const hasSignal = subjectContainsKh(input.subject) || threadHasGeminiSignals(input.thread);
   if (!hasSignal) {
-    return { skip: true, reason: "Skipped Gemini: no KH/referral signals found in subject, body, or attachments." };
+    return { skip: true, reason: "Skipped Gemini: no KH/referral signals found in the subject or email body." };
   }
   return { skip: false as const };
 }

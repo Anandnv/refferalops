@@ -22,22 +22,10 @@ function splitRecipients(value?: string) {
 
 function collectParts(
   part: gmail_v1.Schema$MessagePart,
-  messageId: string,
-  attachments: GmailAttachmentData[],
   textBodies: string[],
   htmlBodies: string[],
 ) {
   const mimeType = part.mimeType ?? "application/octet-stream";
-  if (part.filename && part.body?.attachmentId) {
-    attachments.push({
-      gmailMessageId: messageId,
-      gmailAttachmentId: part.body.attachmentId,
-      filename: part.filename,
-      mimeType,
-      sizeBytes: part.body.size ?? undefined,
-      isInline: headerValue(part.headers, "Content-Disposition")?.toLowerCase().includes("inline") ?? false,
-    });
-  }
   if (mimeType === "text/plain") {
     const body = decodeBody(part.body?.data);
     if (body) textBodies.push(body);
@@ -46,7 +34,7 @@ function collectParts(
     const body = decodeBody(part.body?.data);
     if (body) htmlBodies.push(body);
   }
-  for (const nestedPart of part.parts ?? []) collectParts(nestedPart, messageId, attachments, textBodies, htmlBodies);
+  for (const nestedPart of part.parts ?? []) collectParts(nestedPart, textBodies, htmlBodies);
 }
 
 function parseMessage(message: gmail_v1.Schema$Message, threadId: string): GmailMessageData {
@@ -56,7 +44,7 @@ function parseMessage(message: gmail_v1.Schema$Message, threadId: string): Gmail
   const attachments: GmailAttachmentData[] = [];
   const textBodies: string[] = [];
   const htmlBodies: string[] = [];
-  if (message.payload) collectParts(message.payload, messageId, attachments, textBodies, htmlBodies);
+  if (message.payload) collectParts(message.payload, textBodies, htmlBodies);
   const from = parseAddress(headers.From);
   const timestamp = Number(message.internalDate ?? Date.now());
 
@@ -73,6 +61,7 @@ function parseMessage(message: gmail_v1.Schema$Message, threadId: string): Gmail
     bodyText: textBodies.join("\n\n") || undefined,
     bodyHtml: htmlBodies.join("\n\n") || undefined,
     headers,
+    gmailLabelIds: message.labelIds ?? [],
     gmailUrl: `https://mail.google.com/mail/u/0/#all/${threadId}`,
     attachments,
   };

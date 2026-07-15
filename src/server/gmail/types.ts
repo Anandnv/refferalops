@@ -20,6 +20,7 @@ export type GmailMessageData = {
   bodyText?: string;
   bodyHtml?: string;
   headers: Record<string, string>;
+  gmailLabelIds: string[];
   gmailUrl: string;
   attachments: GmailAttachmentData[];
 };

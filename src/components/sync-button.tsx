@@ -18,7 +18,7 @@ export function SyncButton() {
   return (
     <Button onClick={sync} disabled={state === "loading"} variant="outline">
       {state === "loading" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-      {state === "loading" ? "Syncing…" : state === "error" ? "Sync failed" : "Sync Gmail"}
+      {state === "loading" ? "Loading this month…" : state === "error" ? "Sync failed" : "Load this month's Gmail"}
     </Button>
   );
 }

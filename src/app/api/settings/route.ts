@@ -6,7 +6,7 @@ import { saveGeneralSettings, saveGoogleCredentials, saveOpenAiApiKey } from "@/
 export const runtime = "nodejs";
 
 const payloadSchema = z.object({
-  monitoredEmail: z.string().email(), syncIntervalMinutes: z.coerce.number().int().min(5).max(1440), initialSyncDays: z.coerce.number().int().min(1).max(3650), confidenceThreshold: z.coerce.number().min(0).max(1), openAiModel: z.string().min(1), driveFolderId: z.string().optional(), exportDriveFolderId: z.string().optional(), exportTemplateDriveFileId: z.string().optional(), exportFolderName: z.string().optional(), googleClientId: z.string().optional(), googleClientSecret: z.string().optional(), openAiApiKey: z.string().optional(),
+  monitoredEmail: z.string().email(), syncIntervalMinutes: z.coerce.number().int().min(5).max(1440), initialSyncDays: z.coerce.number().int().min(1).max(3650), confidenceThreshold: z.coerce.number().min(0).max(1), openAiModel: z.string().min(1), exportDriveFolderId: z.string().optional(), exportTemplateDriveFileId: z.string().optional(), exportFolderName: z.string().optional(), googleClientId: z.string().optional(), googleClientSecret: z.string().optional(), openAiApiKey: z.string().optional(),
 });
 
 export async function GET() {

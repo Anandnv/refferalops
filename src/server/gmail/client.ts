@@ -47,17 +47,48 @@ export async function completeGoogleAuthorization(code: string) {
 }
 
 
-export async function findCandidateThreadIds(lastSuccessfulSyncAt?: Date | null) {
+function gmailDate(value: Date) {
+  return value.toISOString().slice(0, 10).replaceAll("-", "/");
+}
+
+function startOfCurrentMonth() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
+export async function findCandidateThreadIds(lastSuccessfulSyncAt?: Date | null, options?: { currentMonth?: boolean; labelId?: string }) {
   const { gmail } = await getAuthenticatedGoogleClients();
   const settings = await getGeneralSettings();
-  const boundary = lastSuccessfulSyncAt
+  const boundary = options?.currentMonth
+    ? startOfCurrentMonth()
+    : lastSuccessfulSyncAt
     ? new Date(lastSuccessfulSyncAt.getTime() - 24 * 60 * 60 * 1000)
     : new Date(Date.now() - settings.initialSyncDays * 24 * 60 * 60 * 1000);
-  const daysBack = Math.max(1, Math.ceil((Date.now() - boundary.getTime()) / (24 * 60 * 60 * 1000)));
-  const query = `in:anywhere subject:KH newer_than:${daysBack}d`;
+  // A manual monthly reconciliation must examine every current-month thread.
+  // Centre requests and approval replies often omit both "KH" and "referral"
+  // from their subject/body, so Gmail keyword filtering loses valid requests.
+  // Normal scheduled runs remain narrower to avoid reprocessing the full inbox.
+  const query = options?.currentMonth
+    ? `in:anywhere newer:${gmailDate(boundary)}`
+    : `in:anywhere newer:${gmailDate(boundary)} {referral incentive khops}`;
 
-  const result = await gmail.users.messages.list({ userId: "me", q: query, maxResults: 100 });
-  return [...new Set((result.data.messages ?? []).flatMap((message) => message.threadId ?? []))];
+  const threadIds = new Set<string>();
+  let pageToken: string | undefined;
+  do {
+    const result = await gmail.users.messages.list({ userId: "me", q: query, labelIds: options?.labelId ? [options.labelId] : undefined, maxResults: 500, pageToken });
+    for (const message of result.data.messages ?? []) {
+      if (message.threadId) threadIds.add(message.threadId);
+    }
+    pageToken = result.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return [...threadIds];
+}
+
+export async function getGmailLabelId(labelName: string) {
+  const { gmail } = await getAuthenticatedGoogleClients();
+  const labels = await gmail.users.labels.list({ userId: "me" });
+  return labels.data.labels?.find((label) => label.name?.trim().toUpperCase() === labelName.trim().toUpperCase())?.id;
 }
 
 export async function getGmailThread(gmailThreadId: string) {

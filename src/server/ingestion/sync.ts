@@ -1,14 +1,12 @@
 import { createHash } from "node:crypto";
 
 import { Prisma, SyncTrigger } from "@prisma/client";
-import type { DetectionMethod, RequestStatus } from "@prisma/client";
+import type { DetectionMethod, RequestStatus, SyncRunStatus as SyncRunStatusType } from "@prisma/client";
 
 import type { ApprovalDetection } from "@/server/extraction/schemas";
 
 import { detectApprovalEvents } from "@/server/approval-status/service";
 import {
-  AttachmentExtractionStatus,
-  AttachmentStorageStatus,
   CentreStatus,
   DetectionMethod as DetectionMethodEnum,
   ExtractionOperation,
@@ -17,20 +15,17 @@ import {
   ReviewStatus,
   SyncRunStatus,
 } from "@/server/db/enums";
-import { inferAttachmentType, canPreview } from "@/server/documents/classifier";
-import { archiveInDrive } from "@/server/documents/drive";
 import { analyzeReferralThread } from "@/server/gemini/analyzer";
 import { isGeminiQuotaError } from "@/server/gemini/client";
 import { shouldSkipGeminiAnalysis } from "@/server/gemini/client";
-import { findCandidateThreadIds, getGmailAttachment, getGmailThread } from "@/server/gmail/client";
-import type { GmailAttachmentData, GmailThreadData } from "@/server/gmail/types";
+import { findCandidateThreadIds, getGmailLabelId, getGmailThread } from "@/server/gmail/client";
+import type { GmailThreadData } from "@/server/gmail/types";
 import { prisma } from "@/server/db/client";
 import { getGeneralSettings, getOpenAiApiKey } from "@/server/settings/service";
 
 type PersistedThread = { id: string; messageIds: Map<string, string> };
-type SyncResult = { status: SyncRunStatus; candidates: number; created: number; updated: number; duplicates: number; failures: string[] };
+type SyncResult = { status: SyncRunStatusType; candidates: number; created: number; updated: number; duplicates: number; failures: string[] };
 
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const IMMUTABLE_REQUEST_STATUSES = new Set<RequestStatus>([RequestStatusEnum.FINAL_APPROVED, RequestStatusEnum.PAID]);
 
 function normalizeCentre(value: string) {
@@ -38,7 +33,7 @@ function normalizeCentre(value: string) {
 }
 
 function extractionHash(thread: GmailThreadData) {
-  return createHash("sha256").update(JSON.stringify(thread.messages.map((message) => ({ id: message.gmailMessageId, body: message.bodyText, attachments: message.attachments.map((attachment) => attachment.gmailAttachmentId) })))).digest("hex");
+  return createHash("sha256").update(JSON.stringify(thread.messages.map((message) => ({ id: message.gmailMessageId, body: message.bodyText })))).digest("hex");
 }
 
 async function persistThread(thread: GmailThreadData): Promise<PersistedThread> {
@@ -89,59 +84,27 @@ async function resolveCentre(value: string | null) {
   return { centreId: centre.id, centreRaw: value };
 }
 
-async function attachmentBuffers(thread: GmailThreadData) {
-  const buffers = new Map<string, Buffer>();
-  for (const attachment of thread.messages.flatMap((message) => message.attachments)) {
-    if ((attachment.sizeBytes ?? 0) > MAX_DOCUMENT_BYTES) continue;
-    if (!attachment.mimeType.startsWith("image/") && attachment.mimeType !== "application/pdf") continue;
-    buffers.set(`${attachment.gmailMessageId}:${attachment.gmailAttachmentId}`, await getGmailAttachment(attachment.gmailMessageId, attachment.gmailAttachmentId));
-  }
-  return buffers;
-}
-
-async function persistAttachments(requestId: string, thread: GmailThreadData, messages: Map<string, string>, buffers: Map<string, Buffer>) {
-  for (const attachment of thread.messages.flatMap((message) => message.attachments)) {
-    const gmailMessageRecordId = messages.get(attachment.gmailMessageId);
-    if (!gmailMessageRecordId) continue;
-    const existing = await prisma.attachment.findUnique({ where: { gmailMessageRecordId_gmailAttachmentId: { gmailMessageRecordId, gmailAttachmentId: attachment.gmailAttachmentId } } });
-    const row = existing ?? await prisma.attachment.create({
-      data: {
-        requestId,
-        gmailMessageRecordId,
-        gmailAttachmentId: attachment.gmailAttachmentId,
-        filename: attachment.filename,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-        isInline: attachment.isInline,
-        type: inferAttachmentType(attachment.filename, attachment.mimeType),
-        previewAvailable: canPreview(attachment.mimeType),
-      },
-    });
-    if (row.googleDriveFileId || row.storageStatus === AttachmentStorageStatus.FAILED) continue;
-    try {
-      const key = `${attachment.gmailMessageId}:${attachment.gmailAttachmentId}`;
-      const buffer = buffers.get(key) ?? await getGmailAttachment(attachment.gmailMessageId, attachment.gmailAttachmentId);
-      const driveId = await archiveInDrive({ filename: attachment.filename, mimeType: attachment.mimeType, buffer });
-      await prisma.attachment.update({
-        where: { id: row.id },
-        data: { googleDriveFileId: driveId, sha256: createHash("sha256").update(buffer).digest("hex"), storageStatus: AttachmentStorageStatus.ARCHIVED, extractionStatus: AttachmentExtractionStatus.EXTRACTED },
-      });
-    } catch {
-      await prisma.attachment.update({ where: { id: row.id }, data: { storageStatus: AttachmentStorageStatus.FAILED, extractionStatus: AttachmentExtractionStatus.FAILED } });
-    }
-  }
-}
-
 async function persistTimeline(
   requestId: string,
   thread: GmailThreadData,
   messageIds: Map<string, string>,
-  options?: { aiEvents?: ApprovalDetection["events"] },
+  options?: { aiEvents?: ApprovalDetection["events"]; labelStatus?: RequestStatus },
 ) {
   const detection = await detectApprovalEvents(thread.messages, options);
   const sourceMessageId = messageIds.get(thread.messages[0]?.gmailMessageId ?? "");
   const receivedEvents = sourceMessageId ? [{ gmailMessageId: thread.messages[0].gmailMessageId, status: RequestStatusEnum.RECEIVED, occurredAt: thread.messages[0].receivedAt, confidence: 1, evidence: "Original referral request received.", detectionMethod: DetectionMethodEnum.SYSTEM }] : [];
-  for (const event of [...receivedEvents, ...detection.events]) {
+  const labelSource = thread.messages.at(-1);
+  const labelEvent = options?.labelStatus && labelSource
+    ? [{
+        gmailMessageId: labelSource.gmailMessageId,
+        status: options.labelStatus,
+        occurredAt: labelSource.receivedAt,
+        confidence: 1,
+        evidence: options.labelStatus === RequestStatusEnum.WAITING_MARKETING_APPROVAL ? "Gmail label: PENDING REF." : "Gmail label check: PENDING REF is not applied.",
+        detectionMethod: DetectionMethodEnum.SYSTEM,
+      }]
+    : [];
+  for (const event of [...receivedEvents, ...detection.events, ...labelEvent]) {
     const sourceGmailMessageRecordId = messageIds.get(event.gmailMessageId);
     if (!sourceGmailMessageRecordId) continue;
     await prisma.timelineEvent.upsert({
@@ -150,10 +113,10 @@ async function persistTimeline(
       update: { occurredAt: event.occurredAt, confidence: event.confidence, evidence: event.evidence, detectionMethod: event.detectionMethod },
     });
   }
-  await prisma.referralRequest.update({ where: { id: requestId }, data: { status: detection.status } });
+  await prisma.referralRequest.update({ where: { id: requestId }, data: { status: options?.labelStatus ?? detection.status } });
 }
 
-async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread) {
+async function createRequestFromThread(thread: GmailThreadData, persisted: PersistedThread, labelStatus?: RequestStatus) {
   const source = thread.messages[0];
   if (!source) return null;
 
@@ -198,14 +161,7 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
     return null;
   }
 
-  const buffers = await attachmentBuffers(thread);
-  const analysis = await analyzeReferralThread({
-    thread,
-    documents: thread.messages.flatMap((message) => message.attachments).flatMap((attachment) => {
-      const content = buffers.get(`${attachment.gmailMessageId}:${attachment.gmailAttachmentId}`);
-      return content ? [{ filename: attachment.filename, mimeType: attachment.mimeType, content }] : [];
-    }),
-  });
+  const analysis = await analyzeReferralThread({ thread });
   const sourceMessageRecordId = persisted.messageIds.get(source.gmailMessageId);
   await prisma.extractionRun.create({
     data: {
@@ -251,12 +207,11 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
       beneficiaries: { create: analysis.value.beneficiaries.map((beneficiary) => ({ type: beneficiary.type, customType: beneficiary.customType, name: beneficiary.name, contact: beneficiary.contact, referralAmount: beneficiary.referralAmount, confidence: beneficiary.confidence, sourceEvidence: { evidence: beneficiary.evidence } })) },
     },
   });
-  await persistAttachments(request.id, thread, persisted.messageIds, buffers);
-  await persistTimeline(request.id, thread, persisted.messageIds, { aiEvents: analysis.value.approvalEvents });
+  await persistTimeline(request.id, thread, persisted.messageIds, { aiEvents: analysis.value.approvalEvents, labelStatus });
   return request;
 }
 
-async function processThread(gmailThreadId: string, options?: { force?: boolean }) {
+async function processThread(gmailThreadId: string, options?: { force?: boolean; pendingReferralLabelId?: string }) {
   if (!options?.force) {
     const immutableExisting = await prisma.referralRequest.findFirst({
       where: {
@@ -272,14 +227,17 @@ async function processThread(gmailThreadId: string, options?: { force?: boolean 
 
   const thread = await getGmailThread(gmailThreadId);
   const persisted = await persistThread(thread);
+  const labelStatus = options?.pendingReferralLabelId
+    ? thread.messages.some((message) => message.gmailLabelIds.includes(options.pendingReferralLabelId!))
+      ? RequestStatusEnum.WAITING_MARKETING_APPROVAL
+      : RequestStatusEnum.FINAL_APPROVED
+    : undefined;
   const existing = await prisma.referralRequest.findUnique({ where: { gmailThreadRecordId: persisted.id } });
   if (existing) {
-    const buffers = await attachmentBuffers(thread);
-    await persistAttachments(existing.id, thread, persisted.messageIds, buffers);
-    await persistTimeline(existing.id, thread, persisted.messageIds);
+    await persistTimeline(existing.id, thread, persisted.messageIds, { labelStatus });
     return "updated" as const;
   }
-  const created = await createRequestFromThread(thread, persisted);
+  const created = await createRequestFromThread(thread, persisted, labelStatus);
   return created ? "created" as const : "ignored" as const;
 }
 
@@ -291,17 +249,30 @@ export async function runReferralSync(input: { trigger: SyncTrigger; force?: boo
     await prisma.syncLog.update({ where: { id: syncLog.id }, data: { status: SyncRunStatus.SKIPPED, completedAt: new Date() } });
     return { status: SyncRunStatus.SKIPPED, candidates: 0, created: 0, updated: 0, duplicates: 0, failures: [] };
   }
-  if (!settings.driveFolderId || !await getOpenAiApiKey()) {
-    const message = !settings.driveFolderId ? "Set a Google Drive folder ID in Settings before syncing." : "Set a Gemini API key in Settings before syncing.";
+  if (!await getOpenAiApiKey()) {
+    const message = "Set a Gemini API key in Settings before syncing.";
     await prisma.syncLog.update({ where: { id: syncLog.id }, data: { status: SyncRunStatus.FAILED, completedAt: new Date(), error: { message } } });
     throw new Error(message);
   }
 
-  const candidateIds = await findCandidateThreadIds(latest?.startedAt);
+  // A manual sync reconciles the current month using the user's Gmail workflow:
+  // every request has Referral Incentive, and the two still awaiting a decision
+  // additionally have PENDING REF.
+  const [referralIncentiveLabelId, pendingReferralLabelId] = await Promise.all([
+    getGmailLabelId("Referral Incentive"),
+    getGmailLabelId("PENDING REF"),
+  ]);
+  if (!referralIncentiveLabelId || !pendingReferralLabelId) {
+    const missingLabel = referralIncentiveLabelId ? "PENDING REF" : "Referral Incentive";
+    const message = `Gmail label '${missingLabel}' was not found. Create it or reconnect the Gmail account, then sync again.`;
+    await prisma.syncLog.update({ where: { id: syncLog.id }, data: { status: SyncRunStatus.FAILED, completedAt: new Date(), error: { message } } });
+    throw new Error(message);
+  }
+  const candidateIds = await findCandidateThreadIds(latest?.startedAt, { currentMonth: input.force, labelId: referralIncentiveLabelId });
   const result: SyncResult = { status: SyncRunStatus.SUCCEEDED, candidates: candidateIds.length, created: 0, updated: 0, duplicates: 0, failures: [] };
   for (const threadId of candidateIds) {
     try {
-      const outcome = await processThread(threadId, { force: input.force });
+      const outcome = await processThread(threadId, { force: input.force, pendingReferralLabelId });
       if (outcome === "created") result.created += 1;
       if (outcome === "updated") result.updated += 1;
       if (outcome === "ignored" || outcome === "immutable") result.duplicates += 1;

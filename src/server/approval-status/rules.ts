@@ -31,6 +31,14 @@ export function detectRuleStatus(subject?: string, body?: string) {
     const matched = source.match(pattern);
     if (matched) return { status, evidence: matched[0], confidence: 0.92 };
   }
+  // Most centre replies are a short "Approved" without naming the approver.
+  // Treat an explicit positive approval as final, but do not misclassify a
+  // message such as "not approved" or "pending approval".
+  const approved = source.match(/\bapproved\b/i);
+  const negativeApproval = /\b(not|not yet|pending|awaiting|without)\s+(?:been\s+)?approved\b/i.test(source);
+  if (approved && !negativeApproval) {
+    return { status: RequestStatusEnum.FINAL_APPROVED, evidence: approved[0], confidence: 0.88 };
+  }
   return null;
 }
 

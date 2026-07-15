@@ -252,7 +252,9 @@ model Attachment {
   id                       String                     @id @default(uuid()) @db.Uuid
   requestId                String                     @map("request_id") @db.Uuid
   gmailMessageRecordId     String                     @map("gmail_message_record_id") @db.Uuid
-  gmailAttachmentId        String                     @map("gmail_attachment_id") @db.VarChar(255)
+  // Gmail attachment identifiers are opaque and can exceed 255 characters.
+  // Keep the full ID so later syncs can safely find the existing attachment.
+  gmailAttachmentId        String                     @map("gmail_attachment_id") @db.Text
   filename                 String                     @db.Text
   mimeType                 String                     @map("mime_type") @db.VarChar(255)
   sizeBytes                Int?                       @map("size_bytes")

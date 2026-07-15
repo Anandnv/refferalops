@@ -37,7 +37,7 @@ export default async function DashboardPage() {
                 <Card key={key}><CardContent className="flex items-center justify-between"><div><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-2xl font-semibold">{key === "monthlyAmount" ? formatCurrency(summary[key]) : summary[key]}</p></div><div className={`rounded-xl p-3 ${color}`}><Icon className="h-5 w-5" /></div></CardContent></Card>
               ))}
             </div>
-            <Card className="mt-6"><CardContent><p className="text-sm font-medium text-slate-700">Sync health</p><p className="mt-1 text-sm text-slate-500">Last run: {formatDateTime(summary.latestSync?.completedAt ?? summary.latestSync?.startedAt)}</p><p className="mt-2 text-sm text-slate-500">The scheduler checks every five minutes and respects your Settings interval.</p></CardContent></Card>
+            <Card className="mt-6"><CardContent><p className="text-sm font-medium text-slate-700">Sync health</p><p className="mt-1 text-sm text-slate-500">Last run: {formatDateTime(summary.latestSync?.completedAt ?? summary.latestSync?.startedAt)}</p>{summary.latestSync?.status === "PARTIAL" ? <p className="mt-2 text-sm text-amber-700">The latest sync was only partly completed: {summary.latestSync.threadCount} Gmail threads checked and {summary.latestSync.failedItemCount} failed. Retry after resolving the shown sync issue.</p> : summary.latestSync?.status === "FAILED" ? <p className="mt-2 text-sm text-red-700">The latest sync failed. Check the Gmail and AI settings, then retry.</p> : <p className="mt-2 text-sm text-slate-500">The scheduler checks every five minutes and respects your Settings interval.</p>}</CardContent></Card>
           </>
         ) : null}
       </div>

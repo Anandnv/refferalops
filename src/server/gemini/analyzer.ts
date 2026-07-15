@@ -1,10 +1,8 @@
 import { referralThreadAnalysisSchema, type ReferralThreadAnalysis } from "@/server/extraction/schemas";
 import type { GmailThreadData } from "@/server/gmail/types";
 
-import { documentToPart, generateStructuredJson, shouldSkipGeminiAnalysis } from "./client";
+import { generateStructuredJson, shouldSkipGeminiAnalysis } from "./client";
 import { threadAnalysisJsonSchema } from "./schemas";
-
-type DocumentInput = { filename: string; mimeType: string; content: Buffer };
 
 const THREAD_ANALYSIS_INSTRUCTIONS = `Analyze this KHOPS referral incentive Gmail thread and return one structured JSON response.
 
@@ -12,7 +10,7 @@ TASK 1 — CLASSIFICATION
 Decide whether the source (first) message is a KHOPS referral incentive request. Do not rely on exact subject matching. Return true only for a referral incentive request, not an unrelated approval or payment email. Provide a short rationale.
 
 TASK 2 — EXTRACTION
-Extract referral-incentive facts from the source email and attached referral documents. Use null for unknown values; never guess. Create one beneficiary item per payee. Classify multiple beneficiaries as SPECIAL. Use ISO date YYYY-MM-DD when a discharge date is present. Confidence values must be between zero and one and uncertainFields must name every weak or contradictory field.
+Extract referral-incentive facts from the email content only. Do not use or request attached supporting documents. Use null for unknown values; never guess. Create one beneficiary item per payee. Classify multiple beneficiaries as SPECIAL. Use ISO date YYYY-MM-DD when a discharge date is present. Confidence values must be between zero and one and uncertainFields must name every weak or contradictory field.
 
 TASK 3 — APPROVAL EVENTS
 Read the full chronological thread and return only explicit approval-chain events. Do not infer an approval from the request itself. Use the gmailMessageId provided for each event and a short evidence excerpt.
@@ -42,7 +40,6 @@ function skippedAnalysis(reason: string): ReferralThreadAnalysis {
 
 export async function analyzeReferralThread(input: {
   thread: GmailThreadData;
-  documents: DocumentInput[];
 }) {
   const source = input.thread.messages[0];
   const skip = shouldSkipGeminiAnalysis({
@@ -52,12 +49,6 @@ export async function analyzeReferralThread(input: {
   if (skip.skip) {
     return { value: skippedAnalysis(skip.reason), model: "skipped" };
   }
-
-  const documents = input.documents.slice(0, 12);
-  const documentParts = documents.flatMap((document) => {
-    const part = documentToPart(document);
-    return part ? [part] : [];
-  });
 
   return generateStructuredJson<ReferralThreadAnalysis>({
     systemInstruction: THREAD_ANALYSIS_INSTRUCTIONS,
@@ -77,7 +68,6 @@ export async function analyzeReferralThread(input: {
           bodyText: message.bodyText,
         })),
       }),
-      ...documentParts,
     ],
     responseJsonSchema: threadAnalysisJsonSchema,
     parser: referralThreadAnalysisSchema,
