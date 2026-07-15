@@ -27,6 +27,8 @@ type PersistedThread = { id: string; messageIds: Map<string, string> };
 type SyncResult = { status: SyncRunStatusType; candidates: number; created: number; updated: number; duplicates: number; failures: string[] };
 
 const IMMUTABLE_REQUEST_STATUSES = new Set<RequestStatus>([RequestStatusEnum.FINAL_APPROVED, RequestStatusEnum.PAID]);
+const MAX_THREAD_ATTEMPTS = 2;
+const ACTIVE_SYNC_TIMEOUT_MS = 5 * 60_000;
 
 function normalizeCentre(value: string) {
   return value.trim().toUpperCase().replace(/\s+/g, " ");
@@ -241,8 +243,34 @@ async function processThread(gmailThreadId: string, options?: { force?: boolean;
   return created ? "created" as const : "ignored" as const;
 }
 
+function isTransientFetchError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /fetch failed|network|socket|timed? ?out/i.test(message);
+}
+
+async function processThreadWithRetry(gmailThreadId: string, options: { force?: boolean; pendingReferralLabelId?: string }) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_THREAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await processThread(gmailThreadId, options);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFetchError(error) || attempt === MAX_THREAD_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+  }
+  throw lastError;
+}
+
 export async function runReferralSync(input: { trigger: SyncTrigger; force?: boolean }) : Promise<SyncResult> {
   const settings = await getGeneralSettings();
+  const activeSync = await prisma.syncLog.findFirst({ where: { status: SyncRunStatus.RUNNING }, orderBy: { startedAt: "desc" } });
+  if (activeSync && Date.now() - activeSync.startedAt.getTime() < ACTIVE_SYNC_TIMEOUT_MS) {
+    throw new Error("A Gmail sync is already running. Please wait for it to finish before starting another one.");
+  }
+  if (activeSync) {
+    await prisma.syncLog.update({ where: { id: activeSync.id }, data: { status: SyncRunStatus.FAILED, completedAt: new Date(), error: { message: "Sync timed out before it completed." } } });
+  }
   const latest = await prisma.syncLog.findFirst({ where: { status: { in: [SyncRunStatus.SUCCEEDED, SyncRunStatus.PARTIAL] } }, orderBy: { startedAt: "desc" } });
   const syncLog = await prisma.syncLog.create({ data: { trigger: input.trigger } });
   if (!input.force && latest && Date.now() - latest.startedAt.getTime() < settings.syncIntervalMinutes * 60_000) {
@@ -272,7 +300,7 @@ export async function runReferralSync(input: { trigger: SyncTrigger; force?: boo
   const result: SyncResult = { status: SyncRunStatus.SUCCEEDED, candidates: candidateIds.length, created: 0, updated: 0, duplicates: 0, failures: [] };
   for (const threadId of candidateIds) {
     try {
-      const outcome = await processThread(threadId, { force: input.force, pendingReferralLabelId });
+      const outcome = await processThreadWithRetry(threadId, { force: input.force, pendingReferralLabelId });
       if (outcome === "created") result.created += 1;
       if (outcome === "updated") result.updated += 1;
       if (outcome === "ignored" || outcome === "immutable") result.duplicates += 1;
