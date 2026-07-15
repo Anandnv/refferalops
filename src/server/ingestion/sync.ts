@@ -20,6 +20,7 @@ import {
 import { inferAttachmentType, canPreview } from "@/server/documents/classifier";
 import { archiveInDrive } from "@/server/documents/drive";
 import { analyzeReferralThread } from "@/server/gemini/analyzer";
+import { isGeminiQuotaError } from "@/server/gemini/client";
 import { shouldSkipGeminiAnalysis } from "@/server/gemini/client";
 import { findCandidateThreadIds, getGmailAttachment, getGmailThread } from "@/server/gmail/client";
 import type { GmailAttachmentData, GmailThreadData } from "@/server/gmail/types";
@@ -198,7 +199,6 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
   }
 
   const buffers = await attachmentBuffers(thread);
-  console.log("About to call analyzeReferralThread");
   const analysis = await analyzeReferralThread({
     thread,
     documents: thread.messages.flatMap((message) => message.attachments).flatMap((attachment) => {
@@ -206,7 +206,6 @@ async function createRequestFromThread(thread: GmailThreadData, persisted: Persi
       return content ? [{ filename: attachment.filename, mimeType: attachment.mimeType, content }] : [];
     }),
   });
-  console.log("Gemini analysis.value", analysis.value);
   const sourceMessageRecordId = persisted.messageIds.get(source.gmailMessageId);
   await prisma.extractionRun.create({
     data: {
@@ -307,7 +306,9 @@ export async function runReferralSync(input: { trigger: SyncTrigger; force?: boo
       if (outcome === "updated") result.updated += 1;
       if (outcome === "ignored" || outcome === "immutable") result.duplicates += 1;
     } catch (error) {
-      result.failures.push(error instanceof Error ? error.message : "Unknown sync error");
+      const message = error instanceof Error ? error.message : "Unknown sync error";
+      result.failures.push(message);
+      if (isGeminiQuotaError(error)) break;
     }
   }
   if (result.failures.length) result.status = SyncRunStatus.PARTIAL;

@@ -12,7 +12,7 @@ const generalSettingsSchema = z.object({
   monitoredEmail: z.string().email().default("team98foperations@gmail.com"),
   syncIntervalMinutes: z.number().int().min(5).max(1440).default(10),
   initialSyncDays: z.number().int().min(1).max(3650).default(365),
-  openAiModel: z.string().min(1).default("gemini-2.5-flash"),
+  openAiModel: z.string().min(1).default("gemini-flash-latest"),
   driveFolderId: z.string().trim().optional().default(""),
   exportDriveFolderId: z.string().trim().optional().default(""),
   exportTemplateDriveFileId: z.string().trim().optional().default(""),

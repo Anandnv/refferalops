@@ -2,7 +2,11 @@ import { GoogleGenAI, type Part } from "@google/genai";
 
 import { getGeneralSettings, getOpenAiApiKey } from "@/server/settings/service";
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-flash-latest";
+const MODEL_ALIASES: Record<string, string> = {
+  "gemini-2.5-flash": "gemini-flash-latest",
+  "gemini-2.5-flash-lite": "gemini-flash-latest",
+};
 
 const REFERRAL_SIGNALS = [
   "referral",
@@ -75,9 +79,20 @@ export function obviouslyNotReferralRequest(input: { bodyText?: string; document
   return !REFERRAL_SIGNALS.some((signal) => body.includes(signal));
 }
 
+function normalizeGeminiModel(model?: string | null) {
+  const trimmed = model?.trim();
+  if (!trimmed) return DEFAULT_MODEL;
+  return MODEL_ALIASES[trimmed] ?? trimmed;
+}
+
 export async function getGeminiModel() {
   const settings = await getGeneralSettings();
-  return process.env.GEMINI_MODEL ?? settings.openAiModel ?? DEFAULT_MODEL;
+  return normalizeGeminiModel(process.env.GEMINI_MODEL ?? settings.openAiModel ?? DEFAULT_MODEL);
+}
+
+export function isGeminiQuotaError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return message.includes("RESOURCE_EXHAUSTED") || message.includes("Quota exceeded");
 }
 
 async function resolveApiKey() {
